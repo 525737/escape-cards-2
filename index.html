@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>2枚のカードで脱出</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --felt:#1d4a3a; --felt-deep:#12332a; --paper:#f6f3ec; --ink:#1b1b1b;
+  --gold:#d9b45a; --muted:#a9c3b6; --line:rgba(255,255,255,.14);
+  color-scheme: light dark;
+  box-sizing:border-box;
+}
+*,*::before,*::after{box-sizing:inherit}
+body{
+  margin:0; min-height:100vh;
+  background:radial-gradient(ellipse at 50% 0%, var(--felt), var(--felt-deep) 75%);
+  background-color:var(--felt-deep); color:var(--paper);
+  font-family:"Zen Kaku Gothic New", system-ui, sans-serif; line-height:1.6;
+}
+main{max-width:520px;margin:0 auto;padding:20px 18px 32px}
+h1{font-family:"Dela Gothic One",sans-serif; font-size:1.6rem; margin:8px 0 6px;}
+.lead{color:var(--muted);margin:0 0 18px;font-size:.95rem}
+.targets{display:flex;gap:12px;margin-bottom:18px}
+.card{
+  flex:1; aspect-ratio:5/7; max-width:120px;
+  background:var(--paper); color:var(--ink); border-radius:10px;
+  position:relative; display:flex; align-items:center; justify-content:center;
+  font-family:"Dela Gothic One",sans-serif; font-size:2.2rem;
+  box-shadow:0 6px 18px rgba(0,0,0,.35); opacity:.38; transition:.3s;
+}
+.card.found{opacity:1; outline:3px solid var(--gold); outline-offset:3px}
+.card .corner{position:absolute;top:6px;left:8px;font-size:.8rem;line-height:1.1;text-align:center;color:var(--ink)}
+.cam{
+  position:relative; width:100%; aspect-ratio:3/4; border-radius:14px; overflow:hidden;
+  background:#000; border:1px solid var(--line);
+}
+.cam video,.cam img{width:100%;height:100%;object-fit:cover;display:block}
+.cam .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;color:var(--muted);font-size:.95rem;text-align:center}
+.actions{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+button,.filebtn{
+  font:inherit; font-weight:700; font-size:1.05rem; border:0; border-radius:12px;
+  padding:15px; cursor:pointer; text-align:center; width:100%;
+}
+.primary{background:var(--gold);color:#2a2105}
+.secondary{background:transparent;color:var(--paper);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:default}
+input[type=file]{position:absolute;width:1px;height:1px;opacity:0}
+.status{min-height:3em;margin-top:14px;font-size:.95rem;color:var(--muted)}
+#win{
+  position:fixed; inset:0; z-index:20; display:none; align-items:center; justify-content:center;
+  flex-direction:column; text-align:center; background:rgba(8,20,16,.92); padding:24px;
+}
+#win.show{display:flex}
+#win h2{font-family:"Dela Gothic One",sans-serif; font-size:4rem; color:var(--gold); margin:0}
+</style>
+</head>
+<body>
+<main>
+  <h1>扉を開けるのは、2枚のカード</h1>
+  <p class="lead">正しい2枚のカードを赤い枠の中に置き、枠ごと写してください。</p>
+
+  <div class="targets">
+    <div class="card" id="c-1"><span class="corner">CARD<br>1</span>？</div>
+    <div class="card" id="c-2"><span class="corner">CARD<br>2</span>？</div>
+  </div>
+
+  <div class="cam" id="cam">
+    <video id="video" playsinline muted autoplay hidden></video>
+    <img id="preview" alt="撮影したカード" hidden>
+    <div class="empty" id="empty">「カメラを起動」を押してください</div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="mainBtn">カメラを起動</button>
+    <label class="filebtn secondary">写真を撮って判定
+      <input type="file" id="file" accept="image/*" capture="environment">
+    </label>
+  </div>
+
+  <div class="status" id="status" aria-live="polite"></div>
+</main>
+
+<div id="win">
+  <h2>脱出成功</h2>
+  <p>扉が開きました！正解のカードが確認されました。</p>
+  <button class="primary" onclick="location.reload()">もう一度遊ぶ</button>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const video=$("video"), preview=$("preview"), empty=$("empty"), mainBtn=$("mainBtn"), fileIn=$("file"), statusEl=$("status");
+let stream=null, busy=false;
+
+// Cloudflare WorkersのURLをここに貼り付けてください
+const WORKER_URL = "https://escape-game-api.YOUR-NAME.workers.dev";
+
+const setStatus = html => { statusEl.innerHTML = html; };
+
+async function startCamera(){
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"},audio:false});
+    video.srcObject = stream; video.hidden=false; preview.hidden=true; empty.hidden=true;
+    mainBtn.textContent="この画面で判定";
+    setStatus("赤い枠とカードが写ったら「この画面で判定」を押してください。");
+  }catch(e){
+    setStatus("カメラを起動できませんでした。「写真を撮って判定」を使ってください。");
+  }
+}
+
+function toBase64(source, w, h){
+  const max=800, scale=Math.min(1, max/Math.max(w,h));
+  const c=document.createElement("canvas");
+  c.width=Math.round(w*scale); c.height=Math.round(h*scale);
+  c.getContext("2d").drawImage(source,0,0,c.width,c.height);
+  return c.toDataURL("image/jpeg", 0.8).split(',')[1];
+}
+
+async function judge(base64Image){
+  if(busy) return;
+  busy=true; mainBtn.disabled=true;
+  setStatus("判定中…");
+
+  try{
+    const res = await fetch(WORKER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base64Image })
+    });
+
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+
+    const result = JSON.parse(data.candidates[0].content.parts[0].text);
+    const frame = !!result.frame, c1 = frame && !!result.heart10, c2 = frame && !!result.club10;
+
+    $("c-1").classList.toggle("found", c1);
+    $("c-2").classList.toggle("found", c2);
+
+    if(c1 && c2){
+      $("win").classList.add("show"); setStatus("");
+    } else if(!frame){
+      setStatus("<strong>判定失敗：</strong>赤い枠が見つかりませんでした。枠全体が写るように撮影してください。");
+    } else {
+      let foundCount = (c1 ? 1 : 0) + (c2 ? 1 : 0);
+      if(foundCount === 1){
+        setStatus("<strong>扉はまだ開きません。</strong>赤枠の中に正しいカードが1枚セットされていますが、もう1枚足りません。");
+      } else {
+        setStatus("<strong>扉はまだ開きません。</strong>赤枠の中に正解のカードが配置されていません。");
+      }
+    }
+  }catch(e){
+    setStatus("エラーが発生しました: " + e.message);
+  }finally{
+    busy=false; mainBtn.disabled=false;
+  }
+}
+
+mainBtn.onclick = async () => {
+  if(!stream){ startCamera(); return; }
+  judge(toBase64(video, video.videoWidth, video.videoHeight));
+};
+
+fileIn.onchange = () => {
+  const f=fileIn
